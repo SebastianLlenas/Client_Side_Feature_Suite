@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Minimalist Leaderboard Podium with Platform</title>
+  <desc id="desc">Three-tier white podium with 1st, 2nd, 3rd numbers and a base platform, no outlines.</desc>
+
+  <!-- Base platform -->
+  <rect x="40" y="388" width="432" height="28" rx="12" fill="#FFFFFF"></rect>
+
+  <!-- Podium blocks (no outlines) -->
+  <!-- Left (2nd place) -->
+  <path d="M60 380 L60 240 Q60 224 76 224 L180 224 Q196 224 196 240 L196 380 Z" fill="#FFFFFF"></path>
+  
+  <!-- Center (1st place, tallest) -->
+  <path d="M190 380 L190 188 Q190 172 206 172 L306 172 Q322 172 322 188 L322 380 Z" fill="#FFFFFF"></path>
+  
+  <!-- Right (3rd place) -->
+  <path d="M320 380 L320 260 Q320 244 336 244 L436 244 Q452 244 452 260 L452 380 Z" fill="#FFFFFF"></path>
+
+  <!-- Numbers (black with no outlines) -->
+  <g fill="#000000" font-family="sans-serif" font-weight="bold" text-anchor="middle" dominant-baseline="middle">
+    <text x="125" y="310" font-size="60">2</text>
+    <text x="255" y="260" font-size="72">1</text>
+    <text x="385" y="330" font-size="60">3</text>
+  </g>
+</svg>

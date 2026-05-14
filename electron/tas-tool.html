@@ -1,0 +1,969 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>TAS Tool</title>
+  <link rel="stylesheet" href="tas-tool.css">
+</head>
+<body>
+  <header>
+    <h1 style="margin:0;font-weight:600;font-size:16px">TAS Tool</h1>
+  </header>
+  <main>
+    <div class="ghosts">
+      <h2>Ghosts</h2>
+      <div class="row" style="gap:6px">
+        <button id="gh-show-all">Show all</button>
+        <button id="gh-hide-all">Hide all</button>
+      </div>
+      <div id="ghosts" class="ghosts-list"></div>
+    </div>
+
+
+    <div class="section-decoded">
+      <label>Decoded (human-readable)</label>
+      <div class="findbar" id="findbar" style="display:none;gap:8px;align-items:center;margin:4px 0">
+        <input id="find" placeholder="Find..." style="width:100%;background:#0f0f17;color:#eee;border:1px solid #2a2a3a;border-radius:6px;padding:6px 10px;font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;font-size:12px;">
+        <span id="find-count" style="font-size:12px;color:#bbb;margin:0 4px"></span>
+        <button id="find-prev">Prev</button>
+        <button id="find-next">Next</button>
+        <button id="find-close">Close</button>
+      </div>
+      <textarea id="decoded" spellcheck="false" class="decoded-editor" placeholder="Decoded ghost input"></textarea>
+      <div id="decoded-overlay" class="decoded-overlay"></div>
+      <div class="decoded-scroll">
+        <button id="decoded-scroll-up" title="Scroll to top">▲</button>
+        <button id="decoded-scroll-down" title="Scroll to bottom">▼</button>
+      </div>
+    </div>
+
+    <div id="command-row" style="display: flex; gap: 8px; align-items: center;">
+      <input id="command" placeholder="e.g., tap 1150 1205 wd 10 5  OR  hold wd for 120 at 2000" style="background: #0f0f17; color: #eee; border: 1px solid #2a2a3a; border-radius: 6px; padding: 8px 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; font-size: 12px;">
+      <button id="execute" style="flex-shrink: 0;">Execute Command</button>
+    </div>
+
+    <div class="section-controls">
+      <div style="display:flex;gap:8px;align-items:center;margin-top:4px">
+        <input id="offset-ms" type="number" placeholder="Offset selected (ms)" style="width:160px;background:#0f0f17;color:#eee;border:1px solid #2a2a3a;border-radius:6px;padding:8px 12px;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;font-size:12px;">
+        <button id="offset-apply">Apply Offset</button>
+      </div>
+
+      <div style="display:flex;gap:8px">
+        <button id="bookmarks-open">Bookmarks</button>
+        <button id="save-file">Save to File</button>
+        <button id="load-file">Load from File</button>
+        <button id="copy">Copy</button>
+        <button id="clear">Clear</button>
+        <button id="apply">Apply</button>
+      </div>
+    </div>
+  </main>
+
+  <div id="palette-overlay" class="palette-overlay">
+    <div class="palette">
+      <input id="palette-input" class="palette-input" placeholder="Type a command: tap, hold, frame #, label...">
+      <div id="palette-list" class="palette-list"></div>
+    </div>
+  </div>
+
+  <div id="bookmarks-overlay" class="palette-overlay">
+    <div class="palette">
+      <div style="display:flex;gap:8px;align-items:center;border-bottom:1px solid #2a2a3a">
+        <input id="bookmarks-filter" class="palette-input" placeholder="Filter labels...">
+        <button id="bookmark-add-current" title="Add label at caret (Ctrl+Shift+B)">Add at caret</button>
+        <button id="bookmark-add-by-frame" title="Add label at frame">Add at frame</button>
+      </div>
+      <div id="bookmarks-list" class="palette-list"></div>
+    </div>
+  </div>
+
+  <script>
+  var $ = function(id){ return document.getElementById(id); };
+  var setVal = function(v){ var el = $("encoded"); if (el) el.value = v || ""; };
+
+  // Simplified editor state helpers (no syntax highlighting)
+  var setHuman = function(v){
+    var d = $("decoded");
+    if (d) {
+      d.value = v || "";
+      d.textContent = v || "";
+    }
+  };
+
+  function renderGhosts(data){
+    try {
+      var root = $("ghosts"); if (!root) return;
+      root.textContent = "";
+      if (!data || !Array.isArray(data.names)) return;
+      var names = data.names || [];
+      var sel = typeof data.selected === "number" ? data.selected : -1;
+      var vis = Array.isArray(data.visibility) ? data.visibility.map(v => v !== false) : names.map(() => true);
+      var colors = Array.isArray(data.colors) ? data.colors : null;
+      var colors2 = Array.isArray(data.secondaryColors) ? data.secondaryColors : null;
+      names.forEach(function(name, idx){
+        var row = document.createElement('div'); row.className = 'ghost-item';
+        var cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !!vis[idx]; cb.disabled = (idx === sel);
+        cb.addEventListener('change', function(){ vis[idx] = cb.checked; try { window.electron.tasToolSetVisibility(vis); } catch(e){} });
+        var colorDot = document.createElement('span'); colorDot.className = 'ghost-color';
+        try {
+          var c1 = colors && colors[idx] && typeof colors[idx] === 'string' ? colors[idx] : null;
+          var c2 = colors2 && colors2[idx] && typeof colors2[idx] === 'string' ? colors2[idx] : null;
+          if (c1 && c2) {
+            colorDot.style.background = 'linear-gradient(90deg, ' + c1 + ' 50%, ' + c2 + ' 50%)';
+          } else if (c1) {
+            colorDot.style.background = c1;
+          } else if (c2) {
+            colorDot.style.background = c2;
+          }
+        } catch(e) {}
+        var lab = document.createElement('span'); lab.className = 'ghost-name'; lab.textContent = (idx === sel ? '[TAS] ' : '') + name;
+        var btn = document.createElement('button'); btn.textContent = 'Load';
+        btn.title = 'Load this ghost into editor';
+        btn.addEventListener('click', function(){ try { window.electron.tasToolRequestLoad(idx); } catch(e){} });
+        row.appendChild(cb); row.appendChild(colorDot); row.appendChild(lab); row.appendChild(btn); root.appendChild(row);
+      });
+      var sh = $("gh-show-all"), hd = $("gh-hide-all");
+      if (sh) sh.onclick = function(){ for (var i=0;i<vis.length;i++){ vis[i] = true } try { window.electron.tasToolSetVisibility(vis) } catch(e){} };
+      if (hd) hd.onclick = function(){ for (var i=0;i<vis.length;i++){ if (i !== sel) vis[i] = false } try { window.electron.tasToolSetVisibility(vis) } catch(e){} };
+    } catch(e) {}
+  }
+
+  window.addEventListener("DOMContentLoaded", function(){
+    setVal(window.__tasEncoded || "");
+    setHuman(window.__tasDecoded || "");
+    window.electron.onTasToolGhostsUpdate(function(payload){ try { renderGhosts(payload) } catch(e){} });
+    if (window.__tasGhosts) { try { renderGhosts(window.__tasGhosts) } catch(e){} }
+
+    $("copy").onclick = function(){
+      var t = $("decoded").value;
+      if (window.navigator && navigator.clipboard && navigator.clipboard.writeText){
+        navigator.clipboard.writeText(t).catch(function(){});
+      } else {
+        try {
+          var temp = document.createElement('textarea');
+          temp.value = t;
+          document.body.appendChild(temp);
+          temp.select();
+          document.execCommand("copy");
+          document.body.removeChild(temp);
+        } catch(e) {}
+      }
+    };
+    $("clear").onclick = function(){ setVal(""); setHuman(""); };
+    $("apply").onclick = function(){
+      try {
+        var ta = $("decoded");
+        var fullText = ta.value || "";
+        var lines = fullText.split("\n");
+        var commands = [];
+        var baseLines = [];
+        function hasGeneratedBlock(linesArr, idx, cmd){
+          var begin = '# BEGIN generated: ' + cmd;
+          var end = '# END generated: ' + cmd;
+          if (linesArr[idx+1] && linesArr[idx+1].trim() === begin){
+            for (var k = idx+2; k < linesArr.length; k++){
+              if ((linesArr[k]||'').trim() === end) return true;
+            }
+          }
+          return false;
+        }
+        for (var i = 0; i < lines.length; i++){
+          var line = lines[i];
+          var hashIdx = line.indexOf('#');
+          var codePart = (hashIdx >= 0 ? line.slice(0, hashIdx) : line).trim();
+          if (/^(tap|hold)\s+/i.test(codePart)) {
+            var skip = hasGeneratedBlock(lines, i, codePart);
+            if (!skip) commands.push({ lineIndex: i, text: codePart });
+          } else if (codePart.length) {
+            baseLines.push(codePart);
+          }
+        }
+
+        function toEntries(map){ return Array.from(map.entries()).map(function(e){ return { frame: e[0], keys: e[1] }; }).sort(function(a,b){ return a.frame - b.frame; }); }
+        function normalizeKeys(str){
+          var order = ["w","a","s","d","r"]; var set = new Set();
+          for (var k of String(str||"")) if (order.indexOf(k) >= 0) set.add(k);
+          return order.filter(function(k){ return set.has(k); }).join("");
+        }
+        function parseLines(text){
+          return (text||"").split("\n").map(function(line){ var idx=line.indexOf("#"); return idx>=0?line.slice(0,idx):line; })
+            .filter(function(line){ return line.trim()!==""; })
+            .map(function(line){ var parts=line.split(","); var frame=parseInt(parts[0],10); var keys=(parts.slice(1).join(",")||"").trim(); return { frame: frame, keys: normalizeKeys(keys) }; })
+            .filter(function(e){ return !isNaN(e.frame); })
+            .sort(function(a,b){ return a.frame - b.frame; });
+        }
+        function getStateAt(entries, frame){ var state=""; for (var i=0;i<entries.length;i++){ if (entries[i].frame <= frame) state = entries[i].keys; else break; } return state; }
+
+        // Start with base map from non-command lines
+        var baseEntries = parseLines(baseLines.join("\n"));
+        var out = new Map(baseEntries.map(function(e){ return [e.frame, e.keys]; }));
+
+        // Apply each command sequentially against the evolving map
+        for (var ci = 0; ci < commands.length; ci++){
+          var cmdText = commands[ci].text;
+          if (/^hold\s+/i.test(cmdText)){
+            var m = cmdText.match(/^hold\s+([wasd]+)\s+for\s+(\d+)\s+at\s+(\d+)$/i) || cmdText.match(/^hold\s+([wasd]+)\s+(\d+)\s+(\d+)$/i);
+            if (!m) continue;
+            var held = normalizeKeys(m[1]); var dur = parseInt(m[2],10); var start = parseInt(m[3],10);
+            if (!held || isNaN(dur) || isNaN(start) || dur <= 0) continue;
+            var end = start + dur;
+            var snapshot = toEntries(out);
+            var startBase = getStateAt(snapshot, start);
+            var startSet = new Set((startBase||"").split("")); for (var ch of held) startSet.add(ch);
+            out.set(start, normalizeKeys(Array.from(startSet).join("")));
+            for (var ei=0; ei<snapshot.length; ei++){
+              var e = snapshot[ei]; if (e.frame > start && e.frame < end){ var mid = new Set((e.keys||"").split("")); for (var ch2 of held) mid.add(ch2); out.set(e.frame, normalizeKeys(Array.from(mid).join(""))); }
+            }
+            var endBase = getStateAt(snapshot, end);
+            out.set(end, normalizeKeys(endBase));
+          } else if (/^tap\s+/i.test(cmdText)){
+            var parts = cmdText.split(/\s+/); if (parts.length !== 6) continue;
+            var arr = parts.map(function(t,i){ return (i>0 && i!==3) ? parseInt(t,10) : t; });
+            var r = arr[1], a2 = arr[2], o = arr[3], s = arr[4], i2 = arr[5];
+            if ([r,a2,s,i2].some(isNaN) || r >= a2 || s <= 0 || i2 <= 0) continue;
+            var snapshot = toEntries(out);
+            var lastKeys = ""; var lastFrame = -1;
+            for (var u=0; u<snapshot.length; u++){ var e = snapshot[u]; if (e.frame < r && e.frame > lastFrame){ lastKeys = e.keys; lastFrame = e.frame; } }
+            var p = r; var seq = [];
+            while (p <= a2){ seq.push([p, String(o)]); p += s; if (p > a2) break; seq.push([p, String(lastKeys)]); p += i2; }
+            for (var q=0; q<seq.length; q++){ out.set(seq[q][0], normalizeKeys(seq[q][1])); }
+          }
+        }
+
+        var finalText = Array.from(out.entries()).sort(function(a,b){ return a[0]-b[0]; }).map(function(kv){ return kv[0]+","+kv[1]; }).join("\n");
+        window.electron.tasToolApply(finalText);
+      } catch (e) {
+        try {
+          var t = $("decoded").value || "";
+          window.electron.tasToolApply(t);
+        } catch (e2) {}
+      }
+    };
+
+    // Scroll helpers for decoded editor
+    try {
+      var scrollUpBtn = $("decoded-scroll-up");
+      var scrollDownBtn = $("decoded-scroll-down");
+      var decoded = $("decoded");
+      if (scrollUpBtn && scrollDownBtn && decoded){
+        scrollUpBtn.addEventListener('click', function(){ try { decoded.scrollTo({ top: 0, behavior: 'smooth' }); } catch(e) { try { decoded.scrollTop = 0; } catch(_) {} } });
+        scrollDownBtn.addEventListener('click', function(){ try { decoded.scrollTo({ top: decoded.scrollHeight, behavior: 'smooth' }); } catch(e) { try { decoded.scrollTop = decoded.scrollHeight; } catch(_) {} } });
+      }
+    } catch (e) {}
+
+    // Save/Load
+    $("save-file").onclick = async function(){
+      try {
+        var t = $("decoded").value || "";
+        await window.electron.tasToolSaveToFile(t);
+      } catch (e) {}
+    };
+    $("load-file").onclick = async function(){
+      try {
+        var res = await window.electron.tasToolLoadFromFile();
+        if (res && !res.canceled && typeof res.content === "string"){
+          setHuman(res.content);
+        }
+      } catch (e) {}
+    };
+
+    // ---- Command execution (shared by button and palette) ----
+    const keyOrder = ["w","a","s","d"];
+    function normalizeKeys(str){
+      if (!str) return "";
+      const set = new Set();
+      for (const ch of String(str)) { if (keyOrder.includes(ch)) set.add(ch); }
+      return keyOrder.filter(k => set.has(k)).join("");
+    }
+    function parseLines(text){
+      return (text || "").split("\n").map(line => {
+        const idx = line.indexOf("#");
+        return idx >= 0 ? line.slice(0, idx) : line;
+      }).filter(line => line.trim() !== "").map(line => {
+        const parts = line.split(",");
+        const frame = parseInt(parts[0], 10);
+        const keys = (parts.slice(1).join(",") || "").trim();
+        return { frame, keys: normalizeKeys(keys) };
+      }).filter(e => !isNaN(e.frame)).sort((a,b) => a.frame - b.frame);
+    }
+    function getStateAt(entries, frame){
+      let state = "";
+      for (let i = 0; i < entries.length; i++) {
+        if (entries[i].frame <= frame) state = entries[i].keys; else break;
+      }
+      return state;
+    }
+    function executeTasCommand(t){
+      if (!t || !(t = String(t).trim())) return false;
+      // HOLD
+      if (t.startsWith("hold")){
+        let m = t.match(/^hold\s+([wasd]+)\s+for\s+(\d+)\s+at\s+(\d+)$/i);
+        if (!m) m = t.match(/^hold\s+([wasd]+)\s+(\d+)\s+(\d+)$/i);
+        if (!m) return false;
+        const heldKeys = normalizeKeys(m[1]);
+        const duration = parseInt(m[2], 10);
+        const start = parseInt(m[3], 10);
+        if (!heldKeys || isNaN(duration) || isNaN(start) || duration <= 0) return false;
+        const end = start + duration;
+        const existingText = $("decoded").value || "";
+        const entries = parseLines(existingText);
+        const baseMap = new Map(entries.map(e => [e.frame, e.keys]));
+        const updates = new Map();
+        const startBase = getStateAt(entries, start);
+        const startSet = new Set([...(startBase || "")]);
+        for (const k of heldKeys) startSet.add(k);
+        const startState = normalizeKeys(Array.from(startSet).join(""));
+        updates.set(start, startState);
+        for (const e of entries) {
+          if (e.frame > start && e.frame < end) {
+            const midSet = new Set([...(e.keys || "")]);
+            for (const k of heldKeys) midSet.add(k);
+            updates.set(e.frame, normalizeKeys(Array.from(midSet).join("")));
+          }
+        }
+        const endBase = getStateAt(entries, end);
+        updates.set(end, normalizeKeys(endBase));
+        const out = new Map(baseMap);
+        for (const [fr, ks] of updates.entries()) out.set(fr, ks);
+        const result = Array.from(out.entries()).sort((a,b) => a[0] - b[0]).map(([fr, ks]) => `${fr},${ks}`);
+        setHuman(result.join("\n"));
+        return true;
+      }
+      // TAP
+      if (t.startsWith("tap ")){
+        const e = t.split(/\s+/);
+        if (6 !== e.length) return false;
+        const n = e.map((t,e) => e > 0 && e !== 3 ? parseInt(t, 10) : t),
+              r = n[1], a = n[2], o = n[3], s = n[4], i = n[5];
+        if ([r,a,s,i].some(isNaN) || r >= a || s <= 0 || i <= 0) return false;
+        const l = $("decoded").value.split("\n").filter(t => "" !== t.trim());
+        let c = ""; let d = -1;
+        for (const u of l){
+          const t = u.split(",");
+          if (2 === t.length){
+            const e = parseInt(t[0], 10);
+            !isNaN(e) && e < r && e > d && (c = t[1].trim(), d = e);
+          }
+        }
+        const f = [];
+        let p = r;
+        for (; p <= a;){
+          f.push(`${p},${o}`); p += s;
+          if (p > a) break;
+          f.push(`${p},${c}`); p += i;
+        }
+        const m = new Map;
+        l.forEach(t => { const e = t.split(","), n = parseInt(e[0],10); isNaN(n) || m.set(n, e[1] ? e[1].trim() : "") });
+        f.forEach(t => { const e = t.split(","), n = parseInt(e[0],10); isNaN(n) || m.set(n, e[1] ? e[1].trim() : "") });
+        const g = Array.from(m.entries()).sort((t,e) => t[0] - e[0]).map(([t,e]) => `${t},${e}`);
+        setHuman(g.join("\n"));
+        return true;
+      }
+      // SHIFT
+      if (/^shift\s+/i.test(t)){
+        let m = t.match(/^shift\s+(-?\d+)\s+from\s+(-?\d+)\s+to\s+(-?\d+)$/i);
+        let hasEnd = true;
+        if (!m){
+          m = t.match(/^shift\s+(-?\d+)\s+from\s+(-?\d+)$/i);
+          hasEnd = false;
+        }
+        if (!m) return false;
+        const delta = parseInt(m[1], 10);
+        let start = parseInt(m[2], 10);
+        let end = hasEnd ? parseInt(m[3], 10) : null;
+        if (isNaN(delta) || isNaN(start) || (hasEnd && isNaN(end))) return false;
+        if (start < 0) start = 0;
+        if (hasEnd && end < 0) end = 0;
+        const ta = $("decoded");
+        if (!ta) return false;
+        const txt = ta.value || "";
+        const lines = txt.split("\n");
+        const out = lines.map(function(line){
+          const mm = line.match(/^(\s*)(\d+)(\s*,[\s\S]*)$/);
+          if (!mm) return line;
+          const fr = parseInt(mm[2], 10);
+          if (isNaN(fr)) return line;
+          if (hasEnd){
+            if (fr < start || fr > end) return line;
+          } else {
+            if (fr < start) return line;
+          }
+          let nf = fr + delta; if (nf < 0) nf = 0;
+          return mm[1] + String(nf) + mm[3];
+        });
+        setHuman(out.join("\n"));
+        return true;
+      }
+      return false;
+    }
+    $("execute").onclick = function(){
+      const t = $("command").value;
+      executeTasCommand(t);
+    };
+
+    var decodedTa = $("decoded"), lastSel = { start:0, end:0 };
+    if (decodedTa){
+        function updateLastSel(){
+          try {
+            lastSel.start = decodedTa.selectionStart || 0;
+            lastSel.end = decodedTa.selectionEnd || 0;
+          } catch(e) {}
+        }
+        decodedTa.addEventListener('select', updateLastSel);
+        decodedTa.addEventListener('keyup', updateLastSel);
+        decodedTa.addEventListener('mouseup', updateLastSel);
+        decodedTa.addEventListener('blur', updateLastSel);
+    }
+
+    document.getElementById("offset-apply").onclick = function(){
+      const t = $("decoded");
+      const e = $("offset-ms"); if (!t || !e) return;
+      const n = parseInt(e.value, 10); if (isNaN(n) || n === 0) return;
+      let o = typeof t.selectionStart === 'number' ? t.selectionStart : lastSel.start;
+      let a = typeof t.selectionEnd === 'number' ? t.selectionEnd : lastSel.end;
+      if (o === a) return;
+      const l = t.value;
+
+      let s = l.lastIndexOf("\n", o - 1) + 1, i = l.indexOf("\n", a);
+      if (i === -1) i = l.length;
+      const r = l.substring(0, s), c = l.substring(i), u = l.substring(s, i);
+      const d = u.split("\n").map(t => {
+        if (t.trim() === "") return t;
+        const e = t.split(","); if (e.length < 2) return t;
+        const o = parseInt(e[0],10); if (isNaN(o)) return t;
+        let a = o + n; if (a < 0) a = 0;
+        const l = e.slice(1).join(",");
+        return `${a},${l}`;
+      }).join("\n");
+
+      setHuman(r + d + c);
+      e.value = "";
+      lastSel = { start: 0, end: 0 };
+    };
+
+    (function(){
+      var fb = $("findbar"), f = $("find"), cnt = $("find-count"), ta = $("decoded");
+      var state = { idx: -1, pos: [] };
+
+      function updateCount(){
+        if (!state.pos.length){ cnt.textContent = "0 of 0"; }
+        else { cnt.textContent = (state.idx + 1) + " of " + state.pos.length; }
+      }
+      function select(k){
+        if (k < 0 || k >= state.pos.length){ if (!state.pos.length) updateCount(); return; }
+        state.idx = k;
+        var start = state.pos[k];
+        var len = (f.value || "").length;
+        var hadFindFocus = document.activeElement === f;
+        ta.focus();
+        try { ta.setSelectionRange(start, start + len); } catch (e) {}
+        try {
+          var textBefore = ta.value.substring(0, start);
+          var lineNumber = textBefore.split('\n').length;
+          var style = window.getComputedStyle(ta);
+          var lineHeight = parseFloat(style.lineHeight) || (parseFloat(style.fontSize) * 1.2) || 15;
+          var scrollTop = (lineNumber - 1) * lineHeight;
+          ta.scrollTop = scrollTop - (ta.clientHeight / 2) + (lineHeight / 2);
+        } catch (e) {}
+        if (hadFindFocus){ try { f.focus(); } catch (e) {} }
+        updateCount();
+      }
+      function refresh(){
+        if (!fb || fb.style.display === "none") return;
+        var term = f.value || "";
+        var txt = ta.value || "";
+        var hay = txt.toLowerCase();
+        var needle = term.toLowerCase();
+        var lastKnownPosition = typeof ta.selectionStart === 'number' ? ta.selectionStart : 0;
+        state.pos = []; state.idx = -1;
+        if (!needle){ updateCount(); return; }
+        var p = 0;
+        while (true){
+          var i = hay.indexOf(needle, p);
+          if (i === -1) break;
+          state.pos.push(i);
+          p = i + needle.length;
+        }
+        if (state.pos.length){
+          var nextIdx = state.pos.findIndex(function(p){ return p >= lastKnownPosition; });
+          select(nextIdx !== -1 ? nextIdx : 0);
+        } else {
+          updateCount();
+        }
+      }
+      function next(){ if (!state.pos.length) return; var newIdx = (state.idx + 1) % state.pos.length; select(newIdx); }
+      function prev(){ if (!state.pos.length) return; var newIdx = (state.idx - 1 + state.pos.length) % state.pos.length; select(newIdx); }
+
+      if (fb && f && cnt && ta){
+        $("find-next").onclick = function(){ next(); };
+        $("find-prev").onclick = function(){ prev(); };
+        $("find-close").onclick = function(){ fb.style.display = "none"; };
+        f.addEventListener("input", function(){ refresh(); });
+        f.addEventListener("keydown", function(e){
+          if (e.key === "Enter"){ e.preventDefault(); e.shiftKey ? prev() : next(); }
+        });
+
+        window.addEventListener("keydown", function(e){
+          if ((e.ctrlKey || e.metaKey) && (e.key === "f" || e.code === "KeyF")){
+            e.preventDefault();
+            fb.style.display = "flex";
+            f.focus(); try { f.select(); } catch (e) {}
+            refresh();
+          } else if (e.key === "Escape" && fb.style.display !== "none"){
+            e.preventDefault();
+            fb.style.display = "none";
+          } else if (e.key === "F3" && fb.style.display !== "none"){
+            e.preventDefault();
+            e.shiftKey ? prev() : next();
+          }
+        });
+
+        var _setHuman = setHuman;
+        setHuman = function(v){
+          _setHuman(v);
+          try { if (fb.style.display !== "none") refresh(); } catch (e) {}
+        };
+      }
+    })();
+
+    // ---- Command expand/collapse overlay for decoded textarea ----
+    (function(){
+      var ta = $("decoded");
+      var ov = $("decoded-overlay");
+      if (!ta || !ov) return;
+
+      var scheduled = false;
+      var measureCanvas = document.createElement('canvas');
+      var measureCtx = measureCanvas.getContext('2d');
+
+      function normalizeKeys(str){
+        var order = ["w","a","s","d"]; var set = new Set();
+        for (var k of String(str||"")) if (order.indexOf(k) >= 0) set.add(k);
+        return order.filter(function(k){ return set.has(k); }).join("");
+      }
+      function parseLines(text){
+        return (text||"").split("\n").map(function(line){ var idx=line.indexOf("#"); return idx>=0?line.slice(0,idx):line; })
+          .filter(function(line){ return line.trim()!==""; })
+          .map(function(line){ var parts=line.split(","); var frame=parseInt(parts[0],10); var keys=(parts.slice(1).join(",")||"").trim(); return { frame: frame, keys: normalizeKeys(keys) }; })
+          .filter(function(e){ return !isNaN(e.frame); })
+          .sort(function(a,b){ return a.frame - b.frame; });
+      }
+      function getStateAt(entries, frame){ var state=""; for (var i=0;i<entries.length;i++){ if (entries[i].frame <= frame) state = entries[i].keys; else break; } return state; }
+      function toEntries(map){ return Array.from(map.entries()).map(function(e){ return { frame: e[0], keys: e[1] }; }).sort(function(a,b){ return a.frame - b.frame; }); }
+
+      function getBaseAndCommands(){
+        var text = ta.value || "";
+        var lines = text.split("\n");
+        var commands = [];
+        var base = [];
+        for (var i=0; i<lines.length; i++){
+          var line = lines[i];
+          var hashIdx = line.indexOf('#');
+          var codePart = (hashIdx >= 0 ? line.slice(0, hashIdx) : line).trim();
+          if (/^(tap|hold)\s+/i.test(codePart)){
+            commands.push({ lineIndex: i, text: codePart, fullLine: line });
+          } else if (codePart.length) {
+            base.push(codePart);
+          }
+        }
+        return { base: parseLines(base.join("\n")), commands: commands };
+      }
+
+      function findGeneratedRange(lines, idx, cmd){
+        var begin = '# BEGIN generated: ' + cmd;
+        var end = '# END generated: ' + cmd;
+        if (lines[idx+1] && lines[idx+1].trim() === begin){
+          for (var k = idx+2; k < lines.length; k++){
+            if ((lines[k]||'').trim() === end){ return { from: idx+1, to: k }; }
+          }
+        }
+        return null;
+      }
+
+      function applyHold(out, cmd){
+        var m = cmd.match(/^hold\s+([wasd]+)\s+for\s+(\d+)\s+at\s+(\d+)$/i) || cmd.match(/^hold\s+([wasd]+)\s+(\d+)\s+(\d+)$/i);
+        if (!m) return [];
+        var held = normalizeKeys(m[1]); var dur = parseInt(m[2],10); var start = parseInt(m[3],10);
+        if (!held || isNaN(dur) || isNaN(start) || dur <= 0) return [];
+        var end = start + dur;
+        var before = new Map(out);
+        var snapshot = toEntries(out);
+        var startBase = getStateAt(snapshot, start);
+        var startSet = new Set((startBase||"").split("")); for (var ch of held) startSet.add(ch);
+        out.set(start, normalizeKeys(Array.from(startSet).join("")));
+        for (var i=0; i<snapshot.length; i++){
+          var e = snapshot[i]; if (e.frame > start && e.frame < end){ var mid = new Set((e.keys||"").split("")); for (var ch2 of held) mid.add(ch2); out.set(e.frame, normalizeKeys(Array.from(mid).join(""))); }
+        }
+        var endBase = getStateAt(snapshot, end);
+        out.set(end, normalizeKeys(endBase));
+        // diff
+        var diff = [];
+        out.forEach(function(val, key){ var prev = before.get(key); if (prev !== val) diff.push([key, val]); });
+        return diff.sort(function(a,b){ return a[0]-b[0]; });
+      }
+      function applyTap(out, cmd){
+        var parts = cmd.split(/\s+/); if (parts.length !== 6) return [];
+        var arr = parts.map(function(t,i){ return (i>0 && i!==3) ? parseInt(t,10) : t; });
+        var r = arr[1], a2 = arr[2], o = arr[3], s = arr[4], i2 = arr[5];
+        if ([r,a2,s,i2].some(isNaN) || r >= a2 || s <= 0 || i2 <= 0) return [];
+        var before = new Map(out);
+        var snapshot = toEntries(out);
+        var lastKeys = ""; var lastFrame = -1;
+        for (var u=0; u<snapshot.length; u++){ var e = snapshot[u]; if (e.frame < r && e.frame > lastFrame){ lastKeys = e.keys; lastFrame = e.frame; } }
+        var p = r; while (p <= a2){ out.set(p, normalizeKeys(String(o))); p += s; if (p > a2) break; out.set(p, normalizeKeys(String(lastKeys))); p += i2; }
+        var diff = [];
+        out.forEach(function(val, key){ var prev = before.get(key); if (prev !== val) diff.push([key, val]); });
+        return diff.sort(function(a,b){ return a[0]-b[0]; });
+      }
+
+      function computeDeltas(){
+        var bc = getBaseAndCommands();
+        var out = new Map(bc.base.map(function(e){ return [e.frame, e.keys]; }));
+        var deltas = new Map(); // lineIndex -> [ [frame,keys], ... ]
+        var ordered = bc.commands.slice().sort(function(a,b){ return a.lineIndex - b.lineIndex; });
+        for (var k=0; k<ordered.length; k++){
+          var c = ordered[k];
+          var d;
+          if (/^hold\s+/i.test(c.text)) d = applyHold(out, c.text); else if (/^tap\s+/i.test(c.text)) d = applyTap(out, c.text); else d = [];
+          deltas.set(c.lineIndex, d);
+        }
+        return { deltas: deltas, commands: bc.commands };
+      }
+
+      function render(){
+        try {
+          // Size overlay to match textarea box
+          var rect = ta.getBoundingClientRect();
+          var parentRect = ov.parentElement.getBoundingClientRect();
+          ov.style.left = (rect.left - parentRect.left) + 'px';
+          ov.style.top = (rect.top - parentRect.top) + 'px';
+          ov.style.width = rect.width + 'px';
+          ov.style.height = rect.height + 'px';
+        } catch(e) {}
+        ov.textContent = '';
+
+        var style = window.getComputedStyle(ta);
+        var lineHeight = parseFloat(style.lineHeight) || (parseFloat(style.fontSize) * 1.2) || 15;
+        var padTop = parseFloat(style.paddingTop) || 0;
+        var padLeft = parseFloat(style.paddingLeft) || 0;
+        var rightPad = parseFloat(style.paddingRight) || 0;
+        var del = computeDeltas();
+        var cmds = del.commands;
+        var deltas = del.deltas;
+        var clientH = ta.clientHeight;
+        var text = ta.value || '';
+        var lines = text.split('\n');
+        // font for measuring
+        var fontStr = style.font || (style.fontWeight + ' ' + style.fontSize + ' ' + style.fontFamily);
+        try { measureCtx.font = fontStr; } catch(e) {}
+
+        for (var i=0; i<cmds.length; i++){
+          var c = cmds[i];
+          var topPx = padTop + c.lineIndex * lineHeight - ta.scrollTop;
+          if (topPx < -lineHeight || topPx > clientH) continue;
+          var rng = findGeneratedRange(lines, c.lineIndex, c.text);
+          var isOpen = !!rng;
+          // If the command text no longer matches strict pattern, don't show arrow
+          if (!/^((tap\s+\S+\s+\S+\s+\S+\s+\S+\s+\S+)|(hold\s+[wasd]+\s+(for\s+\d+\s+at\s+\d+|\d+\s+\d+)))$/i.test(c.text)){
+            continue;
+          }
+          var btn = document.createElement('button');
+          btn.className = 'tas-cmd-arrow';
+          btn.textContent = isOpen ? '▾' : '▸';
+          var lineText = lines[c.lineIndex] || '';
+          var w = 0; try { w = measureCtx.measureText(lineText).width || 0; } catch(e) { w = (lineText.length * (parseFloat(style.fontSize)||12) * 0.6); }
+          var maxLeft = ta.clientWidth - rightPad - 18;
+          var leftPx = Math.min(padLeft + w + 6, maxLeft);
+          btn.style.left = Math.round(leftPx) + 'px';
+          btn.style.top = Math.round(topPx + (lineHeight - 16) / 2) + 'px';
+          btn.title = (isOpen ? 'Hide' : 'Show') + ' generated inputs';
+          (function(cmdObj){ btn.addEventListener('click', function(ev){
+            ev.preventDefault(); ev.stopPropagation();
+            var curText = ta.value || '';
+            var curLines = curText.split('\n');
+            var existing = findGeneratedRange(curLines, cmdObj.lineIndex, cmdObj.text);
+            if (existing){
+              // collapse: remove block
+              var before = curLines.slice(0, existing.from);
+              var after = curLines.slice(existing.to + 1);
+              var newLines = before.concat(after);
+              setHuman(newLines.join('\n'));
+              schedule();
+            } else {
+              // expand: insert generated inputs with markers
+              var entries = deltas.get(cmdObj.lineIndex) || [];
+              var ins = ['# BEGIN generated: ' + cmdObj.text];
+              for (var ii=0; ii<entries.length; ii++){ ins.push(entries[ii][0] + ',' + entries[ii][1]); }
+              ins.push('# END generated: ' + cmdObj.text);
+              var head = curLines.slice(0, cmdObj.lineIndex + 1);
+              var tail = curLines.slice(cmdObj.lineIndex + 1);
+              var newLines = head.concat(ins).concat(tail);
+              setHuman(newLines.join('\n'));
+              schedule();
+            }
+          }); })(c);
+          ov.appendChild(btn);
+        }
+      }
+
+      function schedule(){ if (scheduled) return; scheduled = true; requestAnimationFrame(function(){ scheduled = false; render(); }); }
+
+      ta.addEventListener('input', function(){ schedule(); });
+      ta.addEventListener('scroll', function(){ schedule(); });
+      window.addEventListener('resize', function(){ schedule(); });
+      // Re-render after setHuman programmatic updates
+      try {
+        var __prevSetHuman = setHuman;
+        setHuman = function(v){ __prevSetHuman(v); try { schedule(); } catch(e){} };
+      } catch(e) {}
+
+      // Initial
+      schedule();
+    })();
+
+    // ---- Command Palette ----
+    (function(){
+      var overlay = $("palette-overlay"), input = $("palette-input"), list = $("palette-list");
+      if (!overlay || !input || !list) return;
+
+      function extractLabels(){
+        try {
+          var lines = ($("decoded").value || "").split("\n");
+          var labels = [];
+          var offset = 0;
+          for (var i=0;i<lines.length;i++){
+            var line = lines[i];
+            var idx = line.indexOf('#');
+            if (idx >= 0){
+              var lab = line.slice(idx+1).trim();
+              if (lab) labels.push({ label: lab, lineIndex: i, offset: offset });
+            }
+            offset += line.length + 1;
+          }
+          return labels;
+        } catch(e){ return []; }
+      }
+
+      function selectInTextarea(start, len){
+        try {
+          var ta = $("decoded");
+          ta.focus();
+          ta.setSelectionRange(start, start + len);
+          var textBefore = ta.value.substring(0, start);
+          var lineNumber = textBefore.split('\n').length;
+          var style = window.getComputedStyle(ta);
+          var lineHeight = parseFloat(style.lineHeight) || (parseFloat(style.fontSize) * 1.2) || 15;
+          var scrollTop = (lineNumber - 1) * lineHeight;
+          ta.scrollTop = scrollTop - (ta.clientHeight / 2) + (lineHeight / 2);
+        } catch(e){}
+      }
+
+      function gotoFrame(n){
+        var txt = $("decoded").value || "";
+        var lines = txt.split("\n");
+        var offset = 0;
+        for (var i=0;i<lines.length;i++){
+          var line = lines[i];
+          var fc = line.split(',')[0].trim();
+          var fr = parseInt(fc, 10);
+          if (!isNaN(fr) && fr === n){
+            selectInTextarea(offset, 0);
+            return true;
+          }
+          offset += line.length + 1;
+        }
+        return false;
+      }
+
+      function computeItems(q){
+        var items = [];
+        var query = String(q||"").trim();
+        var labels = extractLabels();
+        // Run typed hold/tap
+        if (/^(tap|hold|shift)\s+/i.test(query)){
+          items.push({ title: 'Run command', sub: query, action: function(){ executeTasCommand(query); close(); } });
+        }
+        // Frame
+        if (/^\d+$/.test(query)){
+          var n = parseInt(query,10);
+          items.push({ title: 'Go to frame ' + n, sub: 'Selects the line starting with ' + n, action: function(){ gotoFrame(n); close(); } });
+        }
+        // Labels
+        if (query){
+          var matches = labels.filter(function(l){ return l.label.toLowerCase().includes(query.toLowerCase()); }).slice(0,10);
+          matches.forEach(function(l){ items.push({ title: 'Go to label', sub: l.label, action: function(){ selectInTextarea(l.offset, 0); close(); } }); });
+        } else {
+          labels.slice(0,5).forEach(function(l){ items.push({ title: 'Go to label', sub: l.label, action: function(){ selectInTextarea(l.offset, 0); close(); } }); });
+        }
+        // Common actions
+        items.push({ title: 'Apply', sub: 'Encode and send to game', action: function(){ try { $("apply").click(); } catch(e){} close(); } });
+        items.push({ title: 'Copy', sub: 'Copy decoded to clipboard', action: function(){ try { $("copy").click(); } catch(e){} close(); } });
+        items.push({ title: 'Clear', sub: 'Clear decoded and encoded', action: function(){ try { $("clear").click(); } catch(e){} close(); } });
+        items.push({ title: 'Save to File', sub: 'Write decoded script to .tas', action: function(){ try { $("save-file").click(); } catch(e){} close(); } });
+        items.push({ title: 'Load from File', sub: 'Load decoded script from file', action: function(){ try { $("load-file").click(); } catch(e){} close(); } });
+        return items;
+      }
+
+      var state = { items: [], idx: 0 };
+      function render(){
+        list.textContent = '';
+        state.items.forEach(function(it, i){
+          var div = document.createElement('div');
+          div.className = 'palette-item' + (i === state.idx ? ' active' : '');
+          var t = document.createElement('div'); t.className = 'palette-title'; t.textContent = it.title;
+          var s = document.createElement('div'); s.className = 'palette-sub'; s.textContent = it.sub || '';
+          div.appendChild(t); div.appendChild(s);
+          div.addEventListener('mousedown', function(e){ e.preventDefault(); state.idx = i; render(); });
+          div.addEventListener('dblclick', function(){ try { state.items[i].action(); } catch(e){} });
+          list.appendChild(div);
+        });
+      }
+      function open(){ overlay.style.display = 'flex'; input.value = ''; state.items = computeItems(''); state.idx = 0; render(); setTimeout(function(){ try { input.focus(); } catch(e){} }, 0); }
+      function close(){ overlay.style.display = 'none'; }
+
+      input.addEventListener('input', function(){ state.items = computeItems(input.value); state.idx = 0; render(); });
+      input.addEventListener('keydown', function(e){
+        if (e.key === 'ArrowDown'){ e.preventDefault(); if (state.items.length) { state.idx = (state.idx + 1) % state.items.length; render(); } }
+        else if (e.key === 'ArrowUp'){ e.preventDefault(); if (state.items.length) { state.idx = (state.idx - 1 + state.items.length) % state.items.length; render(); } }
+        else if (e.key === 'Enter'){ e.preventDefault(); if (state.items[state.idx]) try { state.items[state.idx].action(); } catch(e){} }
+        else if (e.key === 'Escape'){ e.preventDefault(); close(); }
+      });
+      overlay.addEventListener('click', function(e){ if (e.target === overlay) close(); });
+
+      window.addEventListener('keydown', function(e){
+        if ((e.ctrlKey || e.metaKey) && (e.key === 'p' || e.key === 'P')){ e.preventDefault(); open(); }
+        else if (overlay.style.display !== 'none' && e.key === 'Escape'){ e.preventDefault(); close(); }
+      }, true);
+    })();
+
+    // ---- Bookmarks (Labels) Overlay ----
+    (function(){
+      var overlay = $("bookmarks-overlay"), input = $("bookmarks-filter"), list = $("bookmarks-list");
+      var openBtn = $("bookmarks-open");
+      if (!overlay || !input || !list) return;
+
+      function extractLabels(){
+        try {
+          var text = $("decoded").value || "";
+          var lines = text.split("\n");
+          var labels = [];
+          var offset = 0;
+          for (var i=0;i<lines.length;i++){
+            var line = lines[i];
+            var hash = line.indexOf('#');
+            if (hash >= 0){
+              var lab = line.slice(hash+1).trim();
+              if (lab) {
+                var comma = line.indexOf(',');
+                var frameStr = comma >= 0 ? line.slice(0, comma).trim() : '';
+                var frame = parseInt(frameStr, 10);
+                labels.push({ label: lab, lineIndex: i, offset: offset + hash, lineOffset: offset, frame: isNaN(frame) ? null : frame, fullLine: line });
+              }
+            }
+            offset += line.length + 1;
+          }
+          return labels;
+        } catch(e){ return []; }
+      }
+
+      function selectInTextarea(start, len){
+        try {
+          var ta = $("decoded");
+          ta.focus();
+          ta.setSelectionRange(start, start + len);
+          var textBefore = ta.value.substring(0, start);
+          var lineNumber = textBefore.split('\n').length;
+          var style = window.getComputedStyle(ta);
+          var lineHeight = parseFloat(style.lineHeight) || (parseFloat(style.fontSize) * 1.2) || 15;
+          var scrollTop = (lineNumber - 1) * lineHeight;
+          ta.scrollTop = scrollTop - (ta.clientHeight / 2) + (lineHeight / 2);
+        } catch(e){}
+      }
+
+      function render(filter){
+        list.textContent = '';
+        var labels = extractLabels();
+        var q = String(filter||'').trim().toLowerCase();
+        if (q) labels = labels.filter(function(l){ return l.label.toLowerCase().includes(q); });
+        labels.forEach(function(l){
+          var div = document.createElement('div');
+          div.className = 'palette-item';
+          var t = document.createElement('div'); t.className = 'palette-title'; t.textContent = l.label;
+          var s = document.createElement('div'); s.className = 'palette-sub'; s.textContent = (l.frame != null ? ('Frame ' + l.frame + ' — ') : '') + 'Line ' + (l.lineIndex + 1);
+          div.appendChild(t); div.appendChild(s);
+          div.addEventListener('dblclick', function(){ try { selectInTextarea(l.lineOffset, 0); close(); } catch(e){} });
+          div.addEventListener('click', function(){ try { selectInTextarea(l.lineOffset, 0); } catch(e){} });
+          list.appendChild(div);
+        });
+      }
+
+      function open(){ overlay.style.display = 'flex'; render(''); setTimeout(function(){ try { input.focus(); input.select(); } catch(e){} }, 0); }
+      function close(){ overlay.style.display = 'none'; }
+
+      if (openBtn) openBtn.onclick = function(){ open(); };
+      input.addEventListener('input', function(){ render(input.value); });
+      overlay.addEventListener('click', function(e){ if (e.target === overlay) close(); });
+
+      function addLabelAtCaret(){
+        try {
+          var label = prompt('Label text');
+          if (!label) return;
+          var ta = $("decoded");
+          var caret = typeof ta.selectionStart === 'number' ? ta.selectionStart : (window.lastSel && typeof lastSel.start === 'number' ? lastSel.start : 0);
+          var txt = ta.value || '';
+          var start = txt.lastIndexOf('\n', Math.max(0, caret - 1)) + 1;
+          var end = txt.indexOf('\n', caret); if (end === -1) end = txt.length;
+          var before = txt.substring(0, start);
+          var after = txt.substring(end);
+          var line = txt.substring(start, end);
+          var hash = line.indexOf('#');
+          var code = hash >= 0 ? line.slice(0, hash).replace(/\s+$/,'') : line.replace(/\s+$/,'');
+          var newLine = code.length ? (code + ' # ' + label) : ('# ' + label);
+          setHuman(before + newLine + after);
+          try { selectInTextarea(start, 0); } catch(e){}
+          render(input.value);
+        } catch(e){}
+      }
+
+      function addLabelAtFrame(){
+        try {
+          var frameStr = prompt('Frame number'); if (!frameStr) return; var fr = parseInt(frameStr, 10); if (isNaN(fr)) return;
+          var label = prompt('Label text'); if (!label) return;
+          var ta = $("decoded"); var txt = ta.value || '';
+          var lines = txt.split('\n'); var offset = 0; var found = false;
+          for (var i=0;i<lines.length;i++){
+            var line = lines[i];
+            var fc = line.split(',')[0].trim();
+            var n = parseInt(fc, 10);
+            if (!isNaN(n) && n === fr){
+              var hash = line.indexOf('#');
+              var code = hash >= 0 ? line.slice(0, hash).replace(/\s+$/,'') : line.replace(/\s+$/,'');
+              var newLine = code.length ? (code + ' # ' + label) : ('# ' + label);
+              lines[i] = newLine;
+              found = true;
+              break;
+            }
+            offset += line.length + 1;
+          }
+          if (!found){ alert('No line found for frame ' + fr + '.'); return; }
+          setHuman(lines.join('\n'));
+          try { selectInTextarea(offset, 0); } catch(e){}
+          render(input.value);
+        } catch(e){}
+      }
+
+      $("bookmark-add-current").onclick = function(){ addLabelAtCaret(); };
+      $("bookmark-add-by-frame").onclick = function(){ addLabelAtFrame(); };
+
+      // Keyboard shortcuts
+      window.addEventListener('keydown', function(e){
+        var isMod = e.ctrlKey || e.metaKey;
+        if (isMod && !e.altKey && !e.shiftKey && (e.key === 'b' || e.key === 'B')){ e.preventDefault(); open(); }
+        else if (isMod && e.shiftKey && (e.key === 'b' || e.key === 'B')){ e.preventDefault(); addLabelAtCaret(); }
+        else if (overlay.style.display !== 'none' && e.key === 'Escape'){ e.preventDefault(); close(); }
+      }, true);
+    })();
+  });
+  </script>
+</body>
+</html>
